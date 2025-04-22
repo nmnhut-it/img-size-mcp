@@ -1,0 +1,33 @@
+{
+    "name": "image-size-mcp-server",
+    "version": "1.0.0",
+    "description": "MCP server for getting image sizes in directories",
+    "type": "module",
+    "main": "build/index.js",
+    "bin": {
+        "image-size-mcp": "./build/index.js"
+    },
+    "scripts": {
+        "build": "tsc",
+        "test": "cross-env NODE_ENV=test jest",
+        "start": "node build/index.js"
+    },
+    "files": [
+        "build"
+    ],
+    "dependencies": {
+        "@modelcontextprotocol/sdk": "latest",
+        "image-size": "^1.0.2",
+        "zod": "^3.22.4"
+    },
+    "devDependencies": {
+        "@jest/globals": "^29.7.0",
+        "@types/jest": "^29.5.14",
+        "@types/node": "^20.8.0",
+        "cross-env": "^7.0.3",
+        "jest": "^29.7.0",
+        "pkg": "^5.8.1",
+        "ts-jest": "^29.3.2",
+        "typescript": "^5.2.2"
+    }
+}
