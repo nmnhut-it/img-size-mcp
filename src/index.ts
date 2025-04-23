@@ -2,11 +2,14 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import * as fs from "fs/promises";
+import * as http from "http";
+import * as fsm from "fs/promises";
+import * as fs from "fs";
 import * as path from "path";
 import { promisify } from "util";
 import * as imageSize from "image-size";
 import puppeteer from "puppeteer";
+import * as url from "url"; 
 
 // Promisify the image-size function
 const getSizeFromPath = promisify(imageSize.imageSize);
@@ -33,7 +36,7 @@ export interface ConsoleLogEntry {
 export async function getImageInfo(filePath: string): Promise<ImageInfo | null> {
   try {
     // Get file stats
-    const stats = await fs.stat(filePath);
+    const stats = await fsm.stat(filePath);
     
     // Skip if not a file
     if (!stats.isFile()) {
@@ -78,7 +81,7 @@ export async function scanDirectory(dirPath: string, recursive: boolean = false)
   const results: ImageInfo[] = [];
   
   try {
-    const entries = await fs.readdir(dirPath, { withFileTypes: true });
+    const entries = await fsm.readdir(dirPath, { withFileTypes: true });
     
     for (const entry of entries) {
       const fullPath = path.join(dirPath, entry.name);
@@ -254,7 +257,7 @@ const server = new McpServer({
 
 // Common parameters for tools
 const directoryParam = z.string().default("./")
-  .describe("Absolute directory path to scan (relative paths will be converted to absolute)")
+  .describe("Absolute directory path. MAKE SURE TO USE ABSOLUTE PATHS!")
   .transform(dir => path.isAbsolute(dir) ? dir : path.resolve(dir));
 const recursiveParam = z.boolean().default(false).describe("Whether to scan subdirectories recursively");
 
@@ -368,10 +371,10 @@ server.tool(
   async ({ port, directory, waitTimeMs }) => {
     try {
       // Import required modules for server
-      const http = require('http');
-      const fs = require('fs');
-      const path = require('path');
-      const url = require('url');
+      // const http = require('http');
+      // const fs = require('fs');
+      // const path = require('path');
+      // const url = require('url');
       
       return new Promise((resolve) => {
         // Create a server
