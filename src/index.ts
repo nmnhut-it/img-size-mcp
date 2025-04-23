@@ -6,6 +6,7 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import { promisify } from "util";
 import * as imageSize from "image-size";
+import puppeteer from "puppeteer";
 
 // Promisify the image-size function
 const getSizeFromPath = promisify(imageSize.imageSize);
@@ -17,6 +18,13 @@ export interface ImageInfo {
   height?: number;
   type?: string;
   size: number; // File size in bytes
+}
+
+// Interface for console log entry
+export interface ConsoleLogEntry {
+  type: string;    // log, warn, error, etc.
+  text: string;    // log message content
+  timestamp: Date; // when the log was captured
 }
 
 /**
@@ -45,9 +53,9 @@ export async function getImageInfo(filePath: string): Promise<ImageInfo | null> 
       const dimensions = await getSizeFromPath(filePath);
       return {
         path: filePath,
-        width: dimensions.width,
-        height: dimensions.height,
-        type: dimensions.type,
+        width: dimensions?.width,
+        height: dimensions?.height,
+        type: dimensions?.type,
         size: stats.size
       };
     } catch (err) {
@@ -133,9 +141,54 @@ export function generateImageSummary(images: ImageInfo[], dirPath: string, recur
   ].join("\n");
 }
 
+/**
+ * Capture console logs from a website
+ */
+export async function captureConsoleLogs(
+  url: string, 
+  waitTimeMs: number = 10000
+): Promise<ConsoleLogEntry[]> {
+  console.error(`Launching headless browser to capture logs from ${url}...`);
+  
+  const browser = await puppeteer.launch();
+  const page = await browser.newPage();
+  
+  // Collect console logs
+  const consoleLogs: ConsoleLogEntry[] = [];
+  page.on('console', msg => {
+    consoleLogs.push({ 
+      type: msg.type(),
+      text: msg.text(),
+      timestamp: new Date()
+    });
+  });
+
+  try {
+    // Navigate to the specified URL
+    console.error(`Navigating to ${url}`);
+    await page.goto(url, {
+      waitUntil: 'networkidle0',
+      timeout: 30000
+    });
+    
+    // Wait for the specified time to collect any additional logs
+    console.error(`Waiting for ${waitTimeMs / 1000} seconds to collect logs...`);
+    await new Promise(resolve => setTimeout(resolve, waitTimeMs));
+    
+    return consoleLogs;
+  } catch (error) {
+    console.error('Error navigating with Puppeteer:', error);
+    return consoleLogs;
+  } finally {
+    // Close the browser
+    await browser.close();
+    console.error('Browser closed');
+  }
+}
+
 // Create server instance
 const server = new McpServer({
-  name: "image-size",
+  name: "image-size-and-console-logs",
   version: "1.0.0",
   capabilities: {
     resources: {
@@ -166,6 +219,34 @@ const server = new McpServer({
           },
         },
       },
+      consoleLogs: {
+        description: "Console logs captured from a website",
+        fields: {
+          type: { type: "string", description: "Log type (log, warn, error, etc.)" },
+          text: { type: "string", description: "Log message content" },
+          timestamp: { type: "string", description: "When the log was captured" }
+        },
+        list: async ({ url = "http://localhost:3000", waitTimeMs = 10000 }) => {
+          const logs = await captureConsoleLogs(url, waitTimeMs);
+          // Convert Date objects to strings for MCP compatibility
+          return logs.map(log => ({
+            ...log,
+            timestamp: log.timestamp.toISOString()
+          }));
+        },
+        params: {
+          url: {
+            type: "string",
+            default: "http://localhost:3000",
+            description: "URL to visit and capture console logs from"
+          },
+          waitTimeMs: {
+            type: "number",
+            default: 10000,
+            description: "Time to wait in milliseconds after page load before returning logs"
+          }
+        }
+      }
     },
     tools: {},
   },
@@ -176,58 +257,6 @@ const directoryParam = z.string().default("./")
   .describe("Absolute directory path to scan (relative paths will be converted to absolute)")
   .transform(dir => path.isAbsolute(dir) ? dir : path.resolve(dir));
 const recursiveParam = z.boolean().default(false).describe("Whether to scan subdirectories recursively");
-
-// Register the zps-cocos tool
-server.tool(
-  "zps-cocos",
-  "Get sizes of images in the specified directory",
-  {
-    directory: directoryParam,
-    recursive: recursiveParam,
-  },
-  async ({ directory, recursive }) => {
-    try {
-      // Directory is already converted to absolute path by the Zod transform
-      const dirPath = directory;
-      
-      // Scan the directory
-      const imageInfos = await scanDirectory(dirPath, recursive);
-      
-      if (imageInfos.length === 0) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `No images found in ${dirPath}${recursive ? " (including subdirectories)" : ""}.`,
-            },
-          ],
-        };
-      }
-      
-      // Format the results
-      const summary = generateImageSummary(imageInfos, dirPath, recursive);
-      
-      return {
-        content: [
-          {
-            type: "text",
-            text: summary,
-          },
-        ],
-      };
-    } catch (error) {
-      console.error("Error in zps-cocos:", error);
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Error scanning directory: ${error.message}`,
-          },
-        ],
-      };
-    }
-  }
-);
 
 // Register the list-images tool
 server.tool(
@@ -271,11 +300,272 @@ server.tool(
   }
 );
 
+// Register the capture-console-logs tool
+server.tool(
+  "capture-console-logs",
+  "Capture browser console logs from a specified website",
+  {
+    url: z.string().default("http://localhost:3000").describe("URL to visit and capture console logs from"),
+    waitTimeMs: z.number().default(10000).describe("Time to wait in milliseconds after page load before returning logs"),
+    formatOutput: z.boolean().default(true).describe("Format the output as human-readable text if true, else return JSON")
+  },
+  async ({ url, waitTimeMs, formatOutput }) => {
+    try {
+      const logs = await captureConsoleLogs(url, waitTimeMs);
+      
+      if (logs.length === 0) {
+        return {
+          content: [
+            { type: "text", text: `No console logs captured from ${url}.` },
+          ],
+        };
+      }
+      
+      if (formatOutput) {
+        // Format logs as human-readable text
+        const formattedLogs = logs.map(log => 
+          `[${log.timestamp.toISOString()}] ${log.type.toUpperCase()}: ${log.text}`
+        ).join('\n');
+        
+        return {
+          content: [
+            { type: "text", text: `Captured ${logs.length} console logs from ${url}:\n\n${formattedLogs}` }
+          ]
+        };
+      } else {
+        // Return logs as JSON
+        const jsonLogs = logs.map(log => ({
+          ...log,
+          timestamp: log.timestamp.toISOString()
+        }));
+        
+        return {
+          content: [
+            { type: "text", text: JSON.stringify(jsonLogs, null, 2) }
+          ]
+        };
+      }
+    } catch (error) {
+      console.error("Error in capture-console-logs:", error);
+      return {
+        content: [
+          { type: "text", text: `Error capturing console logs: ${error.message}` },
+        ],
+      };
+    }
+  }
+);
+
+// Register the run-local-server tool
+server.tool(
+  "run-local-server",
+  "Run a local static file server and capture console logs from browsers visiting it",
+  {
+    port: z.number().default(3000).describe("Port to run the server on"),
+    directory: directoryParam,
+    waitTimeMs: z.number().default(10000).describe("Time to wait in milliseconds after page load before returning logs")
+  },
+  async ({ port, directory, waitTimeMs }) => {
+    try {
+      // Import required modules for server
+      const http = require('http');
+      const fs = require('fs');
+      const path = require('path');
+      const url = require('url');
+      
+      return new Promise((resolve) => {
+        // Create a server
+        const httpServer = http.createServer((req, res) => {
+          // Parse the URL
+          const parsedUrl = url.parse(req.url, true);
+          let pathname = parsedUrl.pathname;
+          
+          // If path is '/', serve index.html if it exists, otherwise directory listing
+          if (pathname === '/') {
+            const indexPath = path.join(directory, 'index.html');
+            if (fs.existsSync(indexPath)) {
+              pathname = '/index.html';
+            } else {
+              // Simple directory listing
+              try {
+                const files = fs.readdirSync(directory);
+                res.writeHead(200, { 'Content-Type': 'text/html' });
+                res.end(`
+                  <html>
+                    <head><title>Directory Listing</title></head>
+                    <body>
+                      <h1>Directory Listing</h1>
+                      <ul>
+                        ${files.map(file => `<li><a href="/${file}">${file}</a></li>`).join('')}
+                      </ul>
+                      <script>
+                        console.log('Browser console log: Page loaded at', new Date().toISOString());
+                        console.log('Directory listing rendered with ${files.length} files');
+                      </script>
+                    </body>
+                  </html>
+                `);
+                return;
+              } catch (err) {
+                res.writeHead(500, { 'Content-Type': 'text/plain' });
+                res.end(`500 Internal Server Error: ${err.message}`);
+                return;
+              }
+            }
+          }
+
+          // Resolve file path
+          const filePath = path.join(directory, pathname);
+          
+          // Check if file exists
+          fs.stat(filePath, (err, stats) => {
+            if (err) {
+              res.writeHead(404, { 'Content-Type': 'text/plain' });
+              res.end('404 Not Found');
+              return;
+            }
+
+            // If it's a directory, return directory listing
+            if (stats.isDirectory()) {
+              try {
+                const files = fs.readdirSync(filePath);
+                res.writeHead(200, { 'Content-Type': 'text/html' });
+                res.end(`
+                  <html>
+                    <head><title>Directory Listing - ${pathname}</title></head>
+                    <body>
+                      <h1>Directory Listing - ${pathname}</h1>
+                      <ul>
+                        <li><a href="${pathname === '/' ? '' : pathname}/..">..</a></li>
+                        ${files.map(file => `<li><a href="${path.join(pathname, file)}">${file}</a></li>`).join('')}
+                      </ul>
+                      <script>
+                        console.log('Browser console log: Directory page loaded at', new Date().toISOString());
+                        console.log('Subdirectory listing rendered with ${files.length} files');
+                      </script>
+                    </body>
+                  </html>
+                `);
+              } catch (err) {
+                res.writeHead(500, { 'Content-Type': 'text/plain' });
+                res.end(`500 Internal Server Error: ${err.message}`);
+              }
+              return;
+            }
+
+            // Read file and serve it
+            fs.readFile(filePath, (err, data) => {
+              if (err) {
+                res.writeHead(500, { 'Content-Type': 'text/plain' });
+                res.end('500 Internal Server Error');
+                return;
+              }
+
+              // Get file extension and set content type
+              const ext = path.extname(filePath).toLowerCase();
+              let contentType = 'text/plain';
+              
+              switch (ext) {
+                case '.html':
+                  contentType = 'text/html';
+                  break;
+                case '.js':
+                  contentType = 'text/javascript';
+                  break;
+                case '.css':
+                  contentType = 'text/css';
+                  break;
+                case '.json':
+                  contentType = 'application/json';
+                  break;
+                case '.png':
+                  contentType = 'image/png';
+                  break;
+                case '.jpg':
+                case '.jpeg':
+                  contentType = 'image/jpeg';
+                  break;
+                case '.gif':
+                  contentType = 'image/gif';
+                  break;
+              }
+
+              // If it's HTML, inject script tag with console.log
+              if (contentType === 'text/html') {
+                let htmlContent = data.toString();
+                // Inject console.log before closing body tag if it exists
+                if (htmlContent.includes('</body>')) {
+                  htmlContent = htmlContent.replace('</body>', `
+                    <script>
+                      console.log('Browser console log: Page "${pathname}" loaded at', new Date().toISOString());
+                      console.log('Content type: ${contentType}');
+                      console.log('File size: ${stats.size} bytes');
+                    </script>
+                    </body>
+                  `);
+                } else {
+                  // Otherwise append to the end
+                  htmlContent += `
+                    <script>
+                      console.log('Browser console log: Page "${pathname}" loaded at', new Date().toISOString());
+                      console.log('Content type: ${contentType}');
+                      console.log('File size: ${stats.size} bytes');
+                    </script>
+                  `;
+                }
+                data = Buffer.from(htmlContent);
+              }
+
+              res.writeHead(200, { 'Content-Type': contentType });
+              res.end(data);
+            });
+          });
+        });
+
+        // Start the server
+        httpServer.listen(port, async () => {
+          console.error(`Local server running at http://localhost:${port}/`);
+          
+          // Capture logs with Puppeteer
+          const logs = await captureConsoleLogs(`http://localhost:${port}/`, waitTimeMs);
+          
+          // Shutdown server
+          httpServer.close(() => {
+            console.error('Local server has been shut down');
+            
+            // Format logs as human-readable text
+            const formattedLogs = logs.map(log => 
+              `[${log.timestamp.toISOString()}] ${log.type.toUpperCase()}: ${log.text}`
+            ).join('\n');
+            
+            // Resolve the promise with the result
+            resolve({
+              content: [
+                { 
+                  type: "text", 
+                  text: `Local server ran on port ${port}, serving directory ${directory}.\n\nCaptured ${logs.length} console logs:\n\n${formattedLogs}` 
+                }
+              ]
+            });
+          });
+        });
+      });
+    } catch (error) {
+      console.error("Error in run-local-server:", error);
+      return {
+        content: [
+          { type: "text", text: `Error running local server: ${error.message}` },
+        ],
+      };
+    }
+  }
+);
+
 // Run the server
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("Image Size MCP Server running on stdio");
+  console.error("Image Size and Console Logs MCP Server running on stdio");
 }
 
 // Only run the server if this file is being run directly

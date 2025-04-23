@@ -18,7 +18,9 @@
     "dependencies": {
         "@modelcontextprotocol/sdk": "latest",
         "image-size": "^1.0.2",
-        "zod": "^3.22.4"
+        "zod": "^3.22.4",
+        "puppeteer": "^21.0.0",
+        "http": "^0.0.1-security"
     },
     "devDependencies": {
         "@jest/globals": "^29.7.0",
