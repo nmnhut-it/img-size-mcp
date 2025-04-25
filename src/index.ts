@@ -369,201 +369,182 @@ server.tool(
     waitTimeMs: z.number().default(10000).describe("Time to wait in milliseconds after page load before returning logs")
   },
   async ({ port, directory, waitTimeMs }) => {
-    try {
-      // Import required modules for server
-      // const http = require('http');
-      // const fs = require('fs');
-      // const path = require('path');
-      // const url = require('url');
-      
-      return new Promise((resolve) => {
-        // Create a server
-        const httpServer = http.createServer((req, res) => {
-          // Parse the URL
-          const parsedUrl = url.parse(req.url, true);
-          let pathname = parsedUrl.pathname;
-          
-          // If path is '/', serve index.html if it exists, otherwise directory listing
-          if (pathname === '/') {
-            const indexPath = path.join(directory, 'index.html');
-            if (fs.existsSync(indexPath)) {
-              pathname = '/index.html';
-            } else {
-              // Simple directory listing
-              try {
-                const files = fs.readdirSync(directory);
-                res.writeHead(200, { 'Content-Type': 'text/html' });
-                res.end(`
-                  <html>
-                    <head><title>Directory Listing</title></head>
-                    <body>
-                      <h1>Directory Listing</h1>
-                      <ul>
-                        ${files.map(file => `<li><a href="/${file}">${file}</a></li>`).join('')}
-                      </ul>
-                      <script>
-                        console.log('Browser console log: Page loaded at', new Date().toISOString());
-                        console.log('Directory listing rendered with ${files.length} files');
-                      </script>
-                    </body>
-                  </html>
-                `);
-                return;
-              } catch (err) {
-                res.writeHead(500, { 'Content-Type': 'text/plain' });
-                res.end(`500 Internal Server Error: ${err.message}`);
-                return;
-              }
+    // This promise resolves after the server is shut down
+    return new Promise((resolve) => {
+      const httpServer = http.createServer((req, res) => {
+        // Parse the URL
+        const parsedUrl = url.parse(req.url, true);
+        let pathname = parsedUrl.pathname || '/';
+
+        // If path is '/', serve index.html if it exists, otherwise directory listing
+        if (pathname === '/') {
+          const indexPath = path.join(directory, 'index.html');
+          if (fs.existsSync(indexPath)) {
+            pathname = '/index.html';
+          } else {
+            // Simple directory listing
+            try {
+              const files = fs.readdirSync(directory);
+              res.writeHead(200, { 'Content-Type': 'text/html' });
+              res.end(`
+                <html>
+                  <head><title>Directory Listing</title></head>
+                  <body>
+                    <h1>Directory Listing</h1>
+                    <ul>
+                      ${files.map(file => `<li><a href="/${file}">${file}</a></li>`).join('')}
+                    </ul>
+                    <script>
+                      console.log('Browser console log: Page loaded at', new Date().toISOString());
+                      console.log('Directory listing rendered with ${files.length} files');
+                    </script>
+                  </body>
+                </html>
+              `);
+              return;
+            } catch (err) {
+              res.writeHead(500, { 'Content-Type': 'text/plain' });
+              res.end(`500 Internal Server Error: ${err instanceof Error ? err.message : err}`);
+              return;
             }
           }
+        }
 
-          // Resolve file path
-          const filePath = path.join(directory, pathname);
-          
-          // Check if file exists
-          fs.stat(filePath, (err, stats) => {
+        const filePath = path.join(directory, pathname);
+
+        fs.stat(filePath, (err, stats) => {
+          if (err) {
+            res.writeHead(404, { 'Content-Type': 'text/plain' });
+            res.end('404 Not Found');
+            return;
+          }
+          if (stats.isDirectory()) {
+            try {
+              const files = fs.readdirSync(filePath);
+              res.writeHead(200, { 'Content-Type': 'text/html' });
+              res.end(`
+                <html>
+                  <head><title>Directory Listing - ${pathname}</title></head>
+                  <body>
+                    <h1>Directory Listing - ${pathname}</h1>
+                    <ul>
+                      <li><a href="${pathname === '/' ? '' : pathname}/..">..</a></li>
+                      ${files.map(file => `<li><a href="${path.join(pathname, file)}">${file}</a></li>`).join('')}
+                    </ul>
+                    <script>
+                      console.log('Browser console log: Directory page loaded at', new Date().toISOString());
+                      console.log('Subdirectory listing rendered with ${files.length} files');
+                    </script>
+                  </body>
+                </html>
+              `);
+            } catch (err) {
+              res.writeHead(500, { 'Content-Type': 'text/plain' });
+              res.end(`500 Internal Server Error: ${err instanceof Error ? err.message : err}`);
+            }
+            return;
+          }
+          // Read file and serve it
+          fs.readFile(filePath, (err, data) => {
             if (err) {
-              res.writeHead(404, { 'Content-Type': 'text/plain' });
-              res.end('404 Not Found');
+              res.writeHead(500, { 'Content-Type': 'text/plain' });
+              res.end('500 Internal Server Error');
               return;
             }
-
-            // If it's a directory, return directory listing
-            if (stats.isDirectory()) {
-              try {
-                const files = fs.readdirSync(filePath);
-                res.writeHead(200, { 'Content-Type': 'text/html' });
-                res.end(`
-                  <html>
-                    <head><title>Directory Listing - ${pathname}</title></head>
-                    <body>
-                      <h1>Directory Listing - ${pathname}</h1>
-                      <ul>
-                        <li><a href="${pathname === '/' ? '' : pathname}/..">..</a></li>
-                        ${files.map(file => `<li><a href="${path.join(pathname, file)}">${file}</a></li>`).join('')}
-                      </ul>
-                      <script>
-                        console.log('Browser console log: Directory page loaded at', new Date().toISOString());
-                        console.log('Subdirectory listing rendered with ${files.length} files');
-                      </script>
-                    </body>
-                  </html>
+            // Get file extension and set content type
+            const ext = path.extname(filePath).toLowerCase();
+            let contentType = 'text/plain';
+            switch (ext) {
+              case '.html':
+                contentType = 'text/html';
+                break;
+              case '.js':
+                contentType = 'text/javascript';
+                break;
+              case '.css':
+                contentType = 'text/css';
+                break;
+              case '.json':
+                contentType = 'application/json';
+                break;
+              case '.png':
+                contentType = 'image/png';
+                break;
+              case '.jpg':
+              case '.jpeg':
+                contentType = 'image/jpeg';
+                break;
+              case '.gif':
+                contentType = 'image/gif';
+                break;
+            }
+            // If it's HTML, inject script tag with console.log
+            if (contentType === 'text/html') {
+              let htmlContent = data.toString();
+              if (htmlContent.includes('</body>')) {
+                htmlContent = htmlContent.replace('</body>', `
+                  <script>
+                    console.log('Browser console log: Page "${pathname}" loaded at', new Date().toISOString());
+                    console.log('Content type: ${contentType}');
+                    console.log('File size: ${stats.size} bytes');
+                  </script>
+                  </body>
                 `);
-              } catch (err) {
-                res.writeHead(500, { 'Content-Type': 'text/plain' });
-                res.end(`500 Internal Server Error: ${err.message}`);
+              } else {
+                htmlContent += `
+                  <script>
+                    console.log('Browser console log: Page "${pathname}" loaded at', new Date().toISOString());
+                    console.log('Content type: ${contentType}');
+                    console.log('File size: ${stats.size} bytes');
+                  </script>
+                `;
               }
-              return;
+              data = Buffer.from(htmlContent);
             }
-
-            // Read file and serve it
-            fs.readFile(filePath, (err, data) => {
-              if (err) {
-                res.writeHead(500, { 'Content-Type': 'text/plain' });
-                res.end('500 Internal Server Error');
-                return;
-              }
-
-              // Get file extension and set content type
-              const ext = path.extname(filePath).toLowerCase();
-              let contentType = 'text/plain';
-              
-              switch (ext) {
-                case '.html':
-                  contentType = 'text/html';
-                  break;
-                case '.js':
-                  contentType = 'text/javascript';
-                  break;
-                case '.css':
-                  contentType = 'text/css';
-                  break;
-                case '.json':
-                  contentType = 'application/json';
-                  break;
-                case '.png':
-                  contentType = 'image/png';
-                  break;
-                case '.jpg':
-                case '.jpeg':
-                  contentType = 'image/jpeg';
-                  break;
-                case '.gif':
-                  contentType = 'image/gif';
-                  break;
-              }
-
-              // If it's HTML, inject script tag with console.log
-              if (contentType === 'text/html') {
-                let htmlContent = data.toString();
-                // Inject console.log before closing body tag if it exists
-                if (htmlContent.includes('</body>')) {
-                  htmlContent = htmlContent.replace('</body>', `
-                    <script>
-                      console.log('Browser console log: Page "${pathname}" loaded at', new Date().toISOString());
-                      console.log('Content type: ${contentType}');
-                      console.log('File size: ${stats.size} bytes');
-                    </script>
-                    </body>
-                  `);
-                } else {
-                  // Otherwise append to the end
-                  htmlContent += `
-                    <script>
-                      console.log('Browser console log: Page "${pathname}" loaded at', new Date().toISOString());
-                      console.log('Content type: ${contentType}');
-                      console.log('File size: ${stats.size} bytes');
-                    </script>
-                  `;
-                }
-                data = Buffer.from(htmlContent);
-              }
-
-              res.writeHead(200, { 'Content-Type': contentType });
-              res.end(data);
-            });
+            res.writeHead(200, { 'Content-Type': contentType });
+            res.end(data);
           });
         });
+      });
 
-        // Start the server
-        httpServer.listen(port, async () => {
-          console.error(`Local server running at http://localhost:${port}/`);
-          
-          // Capture logs with Puppeteer
-          const logs = await captureConsoleLogs(`http://localhost:${port}/`, waitTimeMs);
-          
-          // Shutdown server
+      httpServer.listen(port, async () => {
+        console.error(`Local server running at http://localhost:${port}/`);
+
+        let logs: ConsoleLogEntry[] = [];
+        let errorMsg = '';
+
+        try {
+          logs = await captureConsoleLogs(`http://localhost:${port}/`, waitTimeMs);
+        } catch (error) {
+          errorMsg = error instanceof Error ? error.message : String(error);
+        } finally {
           httpServer.close(() => {
             console.error('Local server has been shut down');
-            
-            // Format logs as human-readable text
-            const formattedLogs = logs.map(log => 
-              `[${log.timestamp.toISOString()}] ${log.type.toUpperCase()}: ${log.text}`
-            ).join('\n');
-            
-            // Resolve the promise with the result
+            let textOut = '';
+
+            if (errorMsg) {
+              textOut = `Error capturing console logs: ${errorMsg}\n\n(HTTP server was properly shut down)`;
+            } else {
+              const formattedLogs = logs.map(log =>
+                `[${log.timestamp.toISOString()}] ${log.type.toUpperCase()}: ${log.text}`
+              ).join('\n');
+              textOut = `Local server ran on port ${port}, serving directory ${directory}.\n\nCaptured ${logs.length} console logs:\n\n${formattedLogs}`;
+            }
+
             resolve({
               content: [
-                { 
-                  type: "text", 
-                  text: `Local server ran on port ${port}, serving directory ${directory}.\n\nCaptured ${logs.length} console logs:\n\n${formattedLogs}` 
+                {
+                  type: "text",
+                  text: textOut
                 }
               ]
             });
           });
-        });
+        }
       });
-    } catch (error) {
-      console.error("Error in run-local-server:", error);
-      return {
-        content: [
-          { type: "text", text: `Error running local server: ${error.message}` },
-        ],
-      };
-    }
+    });
   }
 );
-
 // Run the server
 async function main() {
   const transport = new StdioServerTransport();
